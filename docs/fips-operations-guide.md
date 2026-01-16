@@ -19,47 +19,49 @@ NetBird FIPS mode adds a DTLS 1.3 encryption layer using FIPS 140-3 approved alg
 
 ## Building FIPS-Compliant Binaries
 
-### Option 1: Native Go FIPS (Recommended)
+### Option 1: OpenSSL FIPS (Recommended for Production)
 
-The native Go FIPS module is included in Go 1.24+ and requires no external dependencies.
+Uses OpenSSL 3.0 FIPS Provider (CMVP Certificate #4282) - fully NIST-validated.
+
+**Prerequisites:**
+- OpenSSL 3.0+ installed
+- C compiler (gcc/clang)
+
+**Build:**
+```bash
+# Using build script (recommended)
+./scripts/build-fips.sh
+
+# Manual build
+CGO_ENABLED=1 go build -tags fips -o netbird-fips ./client
+```
+
+**Verify build:**
+```bash
+./scripts/verify-fips.sh
+```
+
+### Option 2: Native Go FIPS (Go 1.24+)
+
+Uses Go's native FIPS module (CMVP A6650 - currently "Review Pending").
 
 ```bash
-# Build all components with native FIPS
+# Build with native Go FIPS
 export GODEBUG=fips140=on
-
-go build -ldflags "-X main.fipsMode=native" -o netbird-client-fips ./client
-go build -ldflags "-X main.fipsMode=native" -o netbird-management-fips ./management
-go build -ldflags "-X main.fipsMode=native" -o netbird-signal-fips ./signal
-go build -ldflags "-X main.fipsMode=native" -o netbird-relay-fips ./relay
+go build -o netbird-client ./client
 ```
 
-### Option 2: OpenSSL FIPS
-
-For environments requiring an already-validated FIPS module:
+### Docker Build (OpenSSL FIPS)
 
 ```bash
-# Requires golang-fips/go toolchain
-export CGO_ENABLED=1
+# Build FIPS-enabled container
+docker build -f Dockerfile.fips -t netbird-fips .
 
-go build -tags openssl_fips -ldflags "-X main.fipsMode=openssl" \
-  -o netbird-client-fips-openssl ./client
+# Run
+docker run netbird-fips --help
 ```
 
-### Docker Build
-
-```dockerfile
-FROM golang:1.25 AS builder
-
-ENV GODEBUG=fips140=on
-WORKDIR /src
-COPY . .
-
-RUN go build -ldflags "-X main.fipsMode=native" -o /netbird-client-fips ./client
-
-FROM gcr.io/distroless/static-debian12
-COPY --from=builder /netbird-client-fips /netbird
-ENTRYPOINT ["/netbird"]
-```
+The Dockerfile uses Debian Bookworm with OpenSSL 3.x and the FIPS provider.
 
 ## Configuration
 
@@ -238,9 +240,21 @@ openssl ecparam -name secp384r1 -genkey -noout -out key.pem
 
 ### FIPS 140-3 Evidence
 
+**OpenSSL FIPS Build (`-tags fips`):**
+
 | Requirement | Evidence |
 |-------------|----------|
-| Validated module | Go Cryptographic Module v1.0.0, CMVP A6650 |
+| Validated module | OpenSSL FIPS Provider, CMVP Certificate #4282 |
+| Validation level | FIPS 140-3 |
+| Approved algorithms | AES-256-GCM, AES-128-GCM, ECDHE P-256/P-384, SHA-256/SHA-384 |
+| Self-tests | Module performs power-on self-tests |
+| Key management | DRBG per SP 800-90A |
+
+**Native Go FIPS Build (GODEBUG=fips140=on):**
+
+| Requirement | Evidence |
+|-------------|----------|
+| Validated module | Go Cryptographic Module v1.0.0, CMVP A6650 (Review Pending) |
 | Approved algorithms | AES-256-GCM, ECDHE P-384, SHA-384 |
 | Self-tests | Module performs power-on self-tests |
 | Key management | DRBG per SP 800-90A |
