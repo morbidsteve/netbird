@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/netbirdio/netbird/internal/fips"
 	nbconfig "github.com/netbirdio/netbird/management/internals/server/config"
 	"github.com/netbirdio/netbird/version"
 )
@@ -50,6 +51,11 @@ var (
 
 // Execute executes the root command.
 func Execute() error {
+	// Initialize FIPS mode early in startup
+	if err := fips.InitServer(); err != nil {
+		return fmt.Errorf("FIPS initialization failed: %w", err)
+	}
+
 	return rootCmd.Execute()
 }
 

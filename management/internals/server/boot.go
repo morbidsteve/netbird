@@ -21,6 +21,7 @@ import (
 	"github.com/netbirdio/management-integrations/integrations"
 	"github.com/netbirdio/netbird/encryption"
 	"github.com/netbirdio/netbird/formatter/hook"
+	"github.com/netbirdio/netbird/internal/fips"
 	nbgrpc "github.com/netbirdio/netbird/management/internals/shared/grpc"
 	"github.com/netbirdio/netbird/management/server/activity"
 	nbContext "github.com/netbirdio/netbird/management/server/context"
@@ -132,13 +133,17 @@ func (s *BaseServer) GRPCServer() *grpc.Server {
 			if err != nil {
 				log.Fatalf("failed to create certificate manager: %v", err)
 			}
-			transportCredentials := credentials.NewTLS(certManager.TLSConfig())
+			tlsConfig := fips.WrapGRPCTLSConfig(certManager.TLSConfig())
+			fips.LogFIPSStatus()
+			transportCredentials := credentials.NewTLS(tlsConfig)
 			gRPCOpts = append(gRPCOpts, grpc.Creds(transportCredentials))
 		} else if s.Config.HttpConfig.CertFile != "" && s.Config.HttpConfig.CertKey != "" {
 			tlsConfig, err := loadTLSConfig(s.Config.HttpConfig.CertFile, s.Config.HttpConfig.CertKey)
 			if err != nil {
 				log.Fatalf("cannot load TLS credentials: %v", err)
 			}
+			tlsConfig = fips.WrapGRPCTLSConfig(tlsConfig)
+			fips.LogFIPSStatus()
 			transportCredentials := credentials.NewTLS(tlsConfig)
 			gRPCOpts = append(gRPCOpts, grpc.Creds(transportCredentials))
 		}
