@@ -1,0 +1,27 @@
+# OpenSSL FIPS Configuration for NetBird
+# This configuration enables the FIPS provider by default
+#
+# Reference: OpenSSL FIPS Provider Certificate #4282
+
+# Enable diagnostics for troubleshooting
+config_diagnostics = 1
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+alg_section = algorithm_sect
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+
+[fips_sect]
+activate = 1
+
+[base_sect]
+# Base provider is needed for encoding/decoding, not crypto
+activate = 1
+
+[algorithm_sect]
+# Restrict to FIPS-approved algorithms only
+default_properties = fips=yes
