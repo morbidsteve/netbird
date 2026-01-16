@@ -1,3 +1,5 @@
+//go:build !fips
+
 package dtlswrap
 
 import (

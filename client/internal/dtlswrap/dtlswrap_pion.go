@@ -1,8 +1,14 @@
+//go:build !fips
+
 // Package dtlswrap provides DTLS encryption wrapping for peer connections.
 //
 // This package wraps raw UDP connections (from ICE) with DTLS encryption
 // using FIPS 140-3 approved cipher suites. It implements the net.Conn interface
 // so it can be used transparently by the WireGuard proxy.
+//
+// Build tags:
+//   - Default (!fips): Uses pion/dtls (not FIPS validated)
+//   - -tags fips: Uses OpenSSL FIPS provider (Certificate #4282)
 package dtlswrap
 
 import (
