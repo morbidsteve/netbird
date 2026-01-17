@@ -16,6 +16,7 @@ import (
 
 	"github.com/netbirdio/netbird/client/iface/configurer"
 	"github.com/netbirdio/netbird/client/iface/wgproxy"
+	"github.com/netbirdio/netbird/client/internal/dtlswrap"
 	"github.com/netbirdio/netbird/client/internal/peer/conntype"
 	"github.com/netbirdio/netbird/client/internal/peer/dispatcher"
 	"github.com/netbirdio/netbird/client/internal/peer/guard"
@@ -691,17 +692,42 @@ func (conn *Conn) isConnectedOnAllWay() (connected bool) {
 
 func (conn *Conn) newProxy(remoteConn net.Conn) (wgproxy.Proxy, error) {
 	conn.Log.Debugf("setup proxied WireGuard connection")
+
+	// Wrap connection with DTLS if FIPS mode is enabled
+	wrappedConn, err := conn.wrapWithDTLS(remoteConn)
+	if err != nil {
+		conn.Log.Errorf("failed to wrap connection with DTLS: %v", err)
+		return nil, err
+	}
+
 	udpAddr := &net.UDPAddr{
 		IP:   conn.config.WgConfig.AllowedIps[0].Addr().AsSlice(),
 		Port: conn.config.WgConfig.WgListenPort,
 	}
 
 	wgProxy := conn.config.WgConfig.WgInterface.GetProxy()
-	if err := wgProxy.AddTurnConn(conn.ctx, udpAddr, remoteConn); err != nil {
+	if err := wgProxy.AddTurnConn(conn.ctx, udpAddr, wrappedConn); err != nil {
 		conn.Log.Errorf("failed to add turn net.Conn to local proxy: %v", err)
 		return nil, err
 	}
 	return wgProxy, nil
+}
+
+// wrapWithDTLS wraps a connection with DTLS encryption if FIPS mode is enabled.
+// The initiator role is determined by comparing public keys (same as ICE controller).
+func (conn *Conn) wrapWithDTLS(remoteConn net.Conn) (net.Conn, error) {
+	cfg := dtlswrap.GetConfig(
+		conn.config.Key,      // peer's public key
+		conn.config.LocalKey, // our public key
+		isController(conn.config), // initiator role matches ICE controller
+	)
+
+	if cfg.Enabled {
+		conn.Log.Infof("FIPS mode: wrapping peer connection with DTLS (role=%s)",
+			map[bool]string{true: "initiator", false: "responder"}[cfg.IsInitiator])
+	}
+
+	return dtlswrap.Wrap(conn.ctx, remoteConn, cfg)
 }
 
 func (conn *Conn) isReadyToUpgrade() bool {

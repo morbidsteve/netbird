@@ -1,0 +1,66 @@
+# NetBird FIPS Test Dockerfile
+# Tests OpenSSL FIPS integration
+#
+# Usage: docker build -f Dockerfile.test -t netbird-fips-test . && docker run netbird-fips-test
+
+FROM golang:1.24-bookworm
+
+# Allow toolchain auto-download for go 1.25 requirement
+ENV GOTOOLCHAIN=auto
+
+# Install OpenSSL 3.0 and build dependencies
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    openssl \
+    pkg-config \
+    tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify OpenSSL version and check for FIPS
+RUN echo "=== OpenSSL Version ===" && \
+    openssl version && \
+    echo "" && \
+    echo "=== OpenSSL Providers ===" && \
+    openssl list -providers || true && \
+    echo "" && \
+    echo "=== FIPS Algorithms ===" && \
+    openssl list -cipher-algorithms | grep -E "AES.*GCM" | head -5
+
+WORKDIR /src
+
+# Copy go modules first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Run all tests
+CMD ["/bin/bash", "-c", "\
+    echo '=== Step 1: Compile OpenSSL FIPS Package ===' && \
+    CGO_ENABLED=1 go build -tags fips -v ./internal/fips/openssl/ && \
+    echo '' && \
+    echo '=== Step 2: Run OpenSSL FIPS Tests ===' && \
+    CGO_ENABLED=1 go test -tags fips -v ./internal/fips/openssl/ && \
+    echo '' && \
+    echo '=== Step 3: Compile dtlswrap (FIPS) ===' && \
+    CGO_ENABLED=1 go build -tags fips -v ./client/internal/dtlswrap/ && \
+    echo '' && \
+    echo '=== Step 4: Run dtlswrap Tests (FIPS) ===' && \
+    CGO_ENABLED=1 go test -tags fips -v ./client/internal/dtlswrap/ && \
+    echo '' && \
+    echo '=== Step 5: Compile dtlswrap (non-FIPS) ===' && \
+    go build -v ./client/internal/dtlswrap/ && \
+    echo '' && \
+    echo '=== Step 6: Run dtlswrap Tests (non-FIPS) ===' && \
+    go test -v ./client/internal/dtlswrap/ && \
+    echo '' && \
+    echo '=== Step 7: Build Full Client (FIPS) ===' && \
+    CGO_ENABLED=1 go build -tags fips -o /tmp/netbird-fips ./client && \
+    echo '' && \
+    echo '=== Step 8: Verify Binary ===' && \
+    ls -la /tmp/netbird-fips && \
+    ldd /tmp/netbird-fips | grep -E 'libssl|libcrypto' && \
+    echo '' && \
+    echo '=== ALL TESTS PASSED ===' \
+"]

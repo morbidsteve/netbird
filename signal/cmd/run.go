@@ -18,10 +18,10 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
-	"github.com/netbirdio/netbird/signal/metrics"
-
 	"github.com/netbirdio/netbird/encryption"
+	"github.com/netbirdio/netbird/internal/fips"
 	"github.com/netbirdio/netbird/shared/signal/proto"
+	"github.com/netbirdio/netbird/signal/metrics"
 	"github.com/netbirdio/netbird/signal/server"
 	"github.com/netbirdio/netbird/util"
 	"github.com/netbirdio/netbird/util/wsproxy"
@@ -235,6 +235,10 @@ func getTLSConfigurations() ([]grpc.ServerOption, *autocert.Manager, *tls.Config
 		}
 		log.Infof("setting up TLS with custom certificates.")
 	}
+
+	// Apply FIPS-approved TLS settings if FIPS mode is enabled
+	tlsConfig = fips.WrapGRPCTLSConfig(tlsConfig)
+	fips.LogFIPSStatus()
 
 	transportCredentials := credentials.NewTLS(tlsConfig)
 

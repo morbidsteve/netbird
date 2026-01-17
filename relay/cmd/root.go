@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/netbirdio/netbird/encryption"
+	"github.com/netbirdio/netbird/internal/fips"
 	"github.com/netbirdio/netbird/relay/healthcheck"
 	"github.com/netbirdio/netbird/relay/server"
 	"github.com/netbirdio/netbird/shared/relay/auth"
@@ -124,6 +125,11 @@ func init() {
 }
 
 func Execute() error {
+	// Initialize FIPS mode early in startup
+	if err := fips.InitServer(); err != nil {
+		return fmt.Errorf("FIPS initialization failed: %w", err)
+	}
+
 	return rootCmd.Execute()
 }
 
@@ -324,6 +330,9 @@ func createSTUNListeners() ([]*net.UDPConn, error) {
 }
 
 func handleTLSConfig(cfg *Config) (*tls.Config, bool, error) {
+	var tlsCfg *tls.Config
+	var err error
+
 	if cfg.LetsencryptAWSRoute53 {
 		log.Debugf("using Let's Encrypt DNS resolver with Route 53 support")
 		r53 := encryption.Route53TLS{
@@ -331,31 +340,31 @@ func handleTLSConfig(cfg *Config) (*tls.Config, bool, error) {
 			Email:   cfg.LetsencryptEmail,
 			Domains: cfg.LetsencryptDomains,
 		}
-		tlsCfg, err := r53.GetCertificate()
+		tlsCfg, err = r53.GetCertificate()
 		if err != nil {
 			return nil, false, fmt.Errorf("%s", err)
 		}
-		return tlsCfg, true, nil
-	}
-
-	if cfg.HasLetsEncrypt() {
+	} else if cfg.HasLetsEncrypt() {
 		log.Infof("setting up TLS with Let's Encrypt.")
-		tlsCfg, err := setupTLSCertManager(cfg.LetsencryptDataDir, cfg.LetsencryptDomains...)
+		tlsCfg, err = setupTLSCertManager(cfg.LetsencryptDataDir, cfg.LetsencryptDomains...)
 		if err != nil {
 			return nil, false, fmt.Errorf("%s", err)
 		}
-		return tlsCfg, true, nil
+	} else if cfg.HasCertConfig() {
+		log.Debugf("using file based TLS config")
+		tlsCfg, err = encryption.LoadTLSConfig(cfg.TlsCertFile, cfg.TlsKeyFile)
+		if err != nil {
+			return nil, false, fmt.Errorf("%s", err)
+		}
+	} else {
+		return nil, false, nil
 	}
 
-	if cfg.HasCertConfig() {
-		log.Debugf("using file based TLS config")
-		tlsCfg, err := encryption.LoadTLSConfig(cfg.TlsCertFile, cfg.TlsKeyFile)
-		if err != nil {
-			return nil, false, fmt.Errorf("%s", err)
-		}
-		return tlsCfg, true, nil
-	}
-	return nil, false, nil
+	// Apply FIPS-approved TLS settings if FIPS mode is enabled
+	tlsCfg = fips.ApplyToTLSConfig(tlsCfg)
+	fips.LogFIPSStatus()
+
+	return tlsCfg, true, nil
 }
 
 func setupTLSCertManager(letsencryptDataDir string, letsencryptDomains ...string) (*tls.Config, error) {

@@ -1,0 +1,61 @@
+# NetBird FIPS Build Dockerfile
+# Uses OpenSSL 3.0 FIPS provider (Certificate #4282)
+#
+# Build: docker build -f Dockerfile.fips -t netbird-fips .
+# Run:   docker run netbird-fips --help
+
+FROM golang:1.24-bookworm AS builder
+
+# Install OpenSSL 3.0 and build dependencies
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    openssl \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify OpenSSL version
+RUN echo "OpenSSL version:" && openssl version
+
+WORKDIR /src
+
+# Copy go modules first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build with FIPS tag
+RUN CGO_ENABLED=1 go build -tags fips -o /netbird-fips ./client
+
+# Verify the binary links against OpenSSL
+RUN ldd /netbird-fips | grep -E "libssl|libcrypto" || echo "Static build or no OpenSSL linkage visible"
+
+# Runtime image
+FROM debian:bookworm-slim
+
+# Install OpenSSL runtime and CA certificates
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy FIPS configuration
+COPY docker/openssl-fips.cnf /etc/ssl/openssl-fips.cnf
+
+# Set OpenSSL config to use FIPS
+ENV OPENSSL_CONF=/etc/ssl/openssl-fips.cnf
+
+# Copy binary
+COPY --from=builder /netbird-fips /usr/local/bin/netbird
+
+# Verify OpenSSL is available
+RUN openssl version
+
+# Create non-root user
+RUN useradd -r -s /bin/false netbird
+USER netbird
+
+ENTRYPOINT ["/usr/local/bin/netbird"]
+CMD ["--help"]

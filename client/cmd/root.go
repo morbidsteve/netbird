@@ -88,6 +88,12 @@ func Execute() error {
 	if isUpdateBinary() {
 		return updateCmd.Execute()
 	}
+
+	// Initialize FIPS mode early in startup
+	if err := InitFIPS(); err != nil {
+		return err
+	}
+
 	return rootCmd.Execute()
 }
 

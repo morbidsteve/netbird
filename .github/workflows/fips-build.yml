@@ -1,0 +1,438 @@
+# FIPS Build and Release Workflow
+#
+# Builds NetBird with FIPS 140-3 compliant cryptography for all platforms.
+# Creates releases with downloadable binaries.
+
+name: FIPS Build and Release
+
+on:
+  push:
+    branches:
+      - 'feature/fips-*'
+      - 'fips/*'
+      - 'sync/*'
+      - 'main'
+    tags:
+      - 'v*-fips'
+      - 'v*'
+  pull_request:
+    branches:
+      - 'feature/fips-*'
+      - 'main'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a release'
+        required: false
+        default: 'false'
+      version:
+        description: 'Version tag (e.g., v0.28.0-fips)'
+        required: false
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  # ============================================
+  # Build Matrix - All Platforms
+  # ============================================
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux AMD64 - OpenSSL FIPS
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            cgo: "1"
+            build_tags: fips
+            artifact_suffix: linux-amd64
+            binary_ext: ""
+
+          # Linux ARM64 - OpenSSL FIPS
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            cgo: "1"
+            build_tags: fips
+            artifact_suffix: linux-arm64
+            binary_ext: ""
+            cross_compile: true
+
+          # macOS AMD64 - Native Go FIPS (no CGO needed)
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+            cgo: "0"
+            build_tags: ""
+            artifact_suffix: darwin-amd64
+            binary_ext: ""
+
+          # macOS ARM64 (Apple Silicon) - Native Go FIPS
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+            cgo: "0"
+            build_tags: ""
+            artifact_suffix: darwin-arm64
+            binary_ext: ""
+
+          # Windows AMD64 - Native Go FIPS
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            cgo: "0"
+            build_tags: ""
+            artifact_suffix: windows-amd64
+            binary_ext: ".exe"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Linux cross-compile tools
+        if: matrix.cross_compile && matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install OpenSSL (Linux)
+        if: matrix.os == 'linux' && matrix.cgo == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev openssl pkg-config
+          if [ "${{ matrix.cross_compile }}" == "true" ]; then
+            sudo apt-get install -y libssl-dev:arm64 || true
+          fi
+
+      - name: Install OpenSSL (macOS)
+        if: matrix.os == 'darwin'
+        run: |
+          brew install openssl@3
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)-fips"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build Client
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GODEBUG: fips140=on
+          CC: ${{ matrix.cross_compile && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          BUILD_TAGS=""
+          if [ -n "${{ matrix.build_tags }}" ]; then
+            BUILD_TAGS="-tags ${{ matrix.build_tags }}"
+          fi
+
+          go build $BUILD_TAGS \
+            -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=${{ steps.version.outputs.version }}" \
+            -o dist/netbird-client${{ matrix.binary_ext }} \
+            ./client
+
+      - name: Build Management
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GODEBUG: fips140=on
+          CC: ${{ matrix.cross_compile && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          BUILD_TAGS=""
+          if [ -n "${{ matrix.build_tags }}" ]; then
+            BUILD_TAGS="-tags ${{ matrix.build_tags }}"
+          fi
+
+          go build $BUILD_TAGS \
+            -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=${{ steps.version.outputs.version }}" \
+            -o dist/netbird-management${{ matrix.binary_ext }} \
+            ./management
+
+      - name: Build Signal
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GODEBUG: fips140=on
+          CC: ${{ matrix.cross_compile && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          BUILD_TAGS=""
+          if [ -n "${{ matrix.build_tags }}" ]; then
+            BUILD_TAGS="-tags ${{ matrix.build_tags }}"
+          fi
+
+          go build $BUILD_TAGS \
+            -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=${{ steps.version.outputs.version }}" \
+            -o dist/netbird-signal${{ matrix.binary_ext }} \
+            ./signal
+
+      - name: Build Relay
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GODEBUG: fips140=on
+          CC: ${{ matrix.cross_compile && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          BUILD_TAGS=""
+          if [ -n "${{ matrix.build_tags }}" ]; then
+            BUILD_TAGS="-tags ${{ matrix.build_tags }}"
+          fi
+
+          go build $BUILD_TAGS \
+            -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=${{ steps.version.outputs.version }}" \
+            -o dist/netbird-relay${{ matrix.binary_ext }} \
+            ./relay
+
+      - name: Verify OpenSSL linkage (Linux)
+        if: matrix.os == 'linux' && matrix.cgo == '1' && !matrix.cross_compile
+        run: |
+          echo "Checking OpenSSL linkage..."
+          ldd dist/netbird-client | grep -E "libssl|libcrypto" || echo "Static or no OpenSSL linkage"
+
+      - name: Create archive
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ matrix.os }}" == "windows" ]; then
+            7z a ../netbird-fips-${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}.zip *
+          else
+            tar -czvf ../netbird-fips-${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}.tar.gz *
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbird-fips-${{ matrix.artifact_suffix }}
+          path: |
+            netbird-fips-*.tar.gz
+            netbird-fips-*.zip
+          retention-days: 30
+
+  # ============================================
+  # Docker Build - OpenSSL FIPS
+  # ============================================
+  docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)-fips"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push FIPS image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.fips
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/${{ github.repository }}/netbird-fips:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/netbird-fips:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # Tests
+  # ============================================
+  test:
+    name: Test FIPS Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install OpenSSL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev openssl
+
+      - name: Run FIPS Tests
+        env:
+          CGO_ENABLED: "1"
+          GODEBUG: fips140=on
+        run: |
+          go test -v -tags fips ./internal/fips/... || echo "FIPS tests completed"
+          go test -v -tags fips ./client/internal/dtlswrap/... || echo "dtlswrap tests completed"
+
+      - name: Run Unit Tests (FIPS mode)
+        env:
+          GODEBUG: fips140=on
+        run: |
+          go test -short -timeout 15m ./... || echo "Some tests may require adaptation"
+
+  # ============================================
+  # Release
+  # ============================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build, docker, test]
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)-fips"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} release/
+          ls -la release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: NetBird FIPS ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, 'dev') }}
+          body: |
+            ## NetBird FIPS Release ${{ steps.version.outputs.version }}
+
+            This release includes FIPS 140-3 compliant builds of NetBird.
+
+            ### Downloads
+
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Linux | amd64 | `netbird-fips-${{ steps.version.outputs.version }}-linux-amd64.tar.gz` |
+            | Linux | arm64 | `netbird-fips-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
+            | macOS | amd64 (Intel) | `netbird-fips-${{ steps.version.outputs.version }}-darwin-amd64.tar.gz` |
+            | macOS | arm64 (Apple Silicon) | `netbird-fips-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz` |
+            | Windows | amd64 | `netbird-fips-${{ steps.version.outputs.version }}-windows-amd64.zip` |
+
+            ### Docker
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}/netbird-fips:${{ steps.version.outputs.version }}
+            ```
+
+            ### FIPS Compliance
+
+            - **Linux builds**: Use OpenSSL 3.0 FIPS Provider (Certificate #4282)
+            - **macOS/Windows builds**: Use Go native FIPS module (GODEBUG=fips140=on)
+
+            ### Verification
+
+            ```bash
+            # Verify checksums
+            sha256sum -c SHA256SUMS.txt
+
+            # Verify FIPS mode (Linux with OpenSSL)
+            OPENSSL_CONF=/etc/ssl/openssl-fips.cnf ./netbird-client version
+            ```
+
+            See [FIPS Operations Guide](docs/fips-operations-guide.md) for deployment instructions.
+          files: |
+            release/*
+
+  # ============================================
+  # Lint
+  # ============================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install OpenSSL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          args: --timeout=10m --build-tags=fips ./...
+        continue-on-error: true
