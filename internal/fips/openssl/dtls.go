@@ -133,6 +133,15 @@ static const char* get_ssl_error_string(SSL *ssl, int ret) {
         default: return "unknown SSL error";
     }
 }
+
+// Wrapper functions for OpenSSL macros (cgo can't call macros directly)
+static void ssl_set_app_data_wrapper(SSL *ssl, void *data) {
+    SSL_set_app_data(ssl, data);
+}
+
+static void ssl_set_mtu_wrapper(SSL *ssl, long mtu) {
+    SSL_set_mtu(ssl, mtu);
+}
 */
 import "C"
 
@@ -207,11 +216,11 @@ func NewDTLSConn(conn net.Conn, config *DTLSConfig) (*DTLSConn, error) {
 		return nil, fmt.Errorf("failed to create PSK data")
 	}
 
-	C.SSL_set_app_data(ssl, unsafe.Pointer(pskData))
+	C.ssl_set_app_data_wrapper(ssl, unsafe.Pointer(pskData))
 
 	// Set MTU if specified
 	if config.MTU > 0 {
-		C.SSL_set_mtu(ssl, C.long(config.MTU))
+		C.ssl_set_mtu_wrapper(ssl, C.long(config.MTU))
 	}
 
 	return &DTLSConn{

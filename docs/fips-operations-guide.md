@@ -4,20 +4,47 @@ This guide covers deploying and operating NetBird in FIPS 140-3 compliant mode f
 
 ## Overview
 
-NetBird FIPS mode adds a DTLS 1.3 encryption layer using FIPS 140-3 approved algorithms around the existing WireGuard tunnels. This provides:
+NetBird FIPS mode adds a DTLS 1.2 encryption layer using FIPS 140-3 approved algorithms around the existing WireGuard tunnels. This provides:
 
-- **FIPS-validated encryption**: AES-256-GCM with ECDHE P-384 key exchange
+- **FIPS-validated encryption**: AES-256-GCM with PSK authentication
 - **Defense in depth**: Two layers of encryption (FIPS outer + WireGuard inner)
 - **Compliance ready**: Meets NIST SP 800-171 requirements for CUI protection
 
+## Quick Start
+
+### Download Pre-built Binaries
+
+Download FIPS-enabled binaries from [GitHub Releases](https://github.com/morbidsteve/netbird/releases):
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| Linux | amd64 | `netbird-fips-vX.Y.Z-linux-amd64.tar.gz` |
+| Linux | arm64 | `netbird-fips-vX.Y.Z-linux-arm64.tar.gz` |
+| macOS | Intel | `netbird-fips-vX.Y.Z-darwin-amd64.tar.gz` |
+| macOS | Apple Silicon | `netbird-fips-vX.Y.Z-darwin-arm64.tar.gz` |
+| Windows | amd64 | `netbird-fips-vX.Y.Z-windows-amd64.zip` |
+
+```bash
+# Linux/macOS example
+curl -LO https://github.com/morbidsteve/netbird/releases/latest/download/netbird-fips-linux-amd64.tar.gz
+tar -xzf netbird-fips-linux-amd64.tar.gz
+sudo mv netbird-client /usr/local/bin/netbird
+```
+
+### Docker
+
+```bash
+docker pull ghcr.io/morbidsteve/netbird/netbird-fips:latest
+docker run ghcr.io/morbidsteve/netbird/netbird-fips:latest --help
+```
+
 ## Prerequisites
 
-- **Go 1.24+** for native FIPS module, OR
-- **golang-fips/go** toolchain for OpenSSL FIPS module
-- TLS certificates using **P-384 or P-256 ECDSA keys**
+- **FIPS-enabled OS** (for full compliance): RHEL 8/9, Ubuntu Pro, or Debian with FIPS provider
+- **OpenSSL 3.0+** for Linux builds with `-tags fips`
 - Understanding of your organization's FIPS compliance requirements
 
-## Building FIPS-Compliant Binaries
+## Building from Source
 
 ### Option 1: OpenSSL FIPS (Recommended for Production)
 
@@ -94,6 +121,35 @@ export NETBIRD_FIPS_ENABLED=true
 export GODEBUG=fips140=on
 ```
 
+**Option C: Systemd service (Linux)**
+
+Create `/etc/systemd/system/netbird-fips.service`:
+
+```ini
+[Unit]
+Description=NetBird FIPS Client
+After=network.target
+
+[Service]
+Type=simple
+Environment="OPENSSL_CONF=/etc/ssl/openssl-fips.cnf"
+Environment="NETBIRD_FIPS_ENABLED=true"
+ExecStart=/usr/local/bin/netbird up --foreground
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable netbird-fips
+sudo systemctl start netbird-fips
+```
+
 ### Certificate Requirements
 
 FIPS mode requires certificates using approved algorithms:
@@ -157,8 +213,8 @@ tshark -r capture.pcap -Y "dtls.handshake" \
 ```
 
 Expected cipher suites:
-- `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384` (0xc02c)
-- `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384` (0xc030)
+- `PSK-AES256-GCM-SHA384` (DTLS peer-to-peer)
+- `PSK-AES128-GCM-SHA256` (DTLS peer-to-peer)
 
 ### Test Non-FIPS Rejection
 

@@ -27,7 +27,7 @@ int init_fips_provider() {
         return -2;
     }
 
-    if (!EVP_default_properties_set(NULL, "fips=yes")) {
+    if (!EVP_set_default_properties(NULL, "fips=yes")) {
         return -3;
     }
 
@@ -35,7 +35,8 @@ int init_fips_provider() {
 }
 
 int is_fips_enabled() {
-    return EVP_default_properties_is_fips_enabled(NULL);
+    // Check if FIPS provider was loaded successfully
+    return (fips_provider != NULL) ? 1 : 0;
 }
 
 void cleanup_providers() {
@@ -80,8 +81,8 @@ var (
 // It is safe to call multiple times; initialization only happens once.
 func InitFIPS() error {
 	initOnce.Do(func() {
-		C.SSL_library_init()
-		C.SSL_load_error_strings()
+		// OpenSSL 3.x auto-initializes; SSL_library_init and SSL_load_error_strings
+		// are deprecated and not needed.
 
 		ret := C.init_fips_provider()
 		if ret != 0 {
